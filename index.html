@@ -329,6 +329,7 @@
             <div>Cargo: <span id="cargo-display">0</span> / <span id="max-cargo-display"></span></div>
             <div>Shield: <span id="shield-display">100</span></div>
             <div>Hull: <span id="hull-display">100</span></div>
+            <div>Time: <span id="system-timer-display">00:00</span></div> <!-- New timer display -->
         </div>
         <div id="message-box">
             <span id="message-text"></span>
@@ -383,6 +384,7 @@
         const maxCargoDisplay = document.getElementById('max-cargo-display');
         const shieldDisplay = document.getElementById('shield-display');
         const hullDisplay = document.getElementById('hull-display'); // Get hull display element
+        const systemTimerDisplay = document.getElementById('system-timer-display'); // New timer display
         const messageBox = document.getElementById('message-box');
         const messageText = document.getElementById('message-text'); // Span for message text
         const playAgainButton = document.getElementById('play-again-button'); // Play Again button
@@ -428,6 +430,8 @@
         const SPACE_STATION_RADIUS = 80; // Larger than planets
         const SPACE_STATION_PROXIMITY_RADIUS = 200;
         const SPACE_STATION_MAX_COUNT = 1; // Only one space station for now
+        const WORMHOLE_RADIUS = 50; // Radius of the wormhole
+        const WORMHOLE_PROXIMITY_RADIUS = 100; // Proximity to activate wormhole
         const MESSAGE_DURATION = 2000; // ms
         const SHOT_COOLDOWN_BASE = 15; // Base fire rate
 
@@ -435,7 +439,7 @@
         const COPPER_ASTEROID_HEALTH = 300;
         const IRON_ASTEROID_HEALTH = 500;
         const ICE_ASTEROID_HEALTH = 100;
-        const ASTEROID_COLLISION_ENERGY_FACTOR = 0.000025; // Factor to convert collision energy to shield damage
+        const ASTEROID_COLLISION_ENERGY_FACTOR = 0.0005; // Factor to convert collision energy to shield damage (restored)
 
         // Player Shield and Hull constants
         const PLAYER_INITIAL_SHIELD_BASE = 100;
@@ -444,7 +448,7 @@
         const PLAYER_INITIAL_HULL_BASE = 250; // Initial hull strength (stronger than shield)
 
         // World dimensions (approx. 10 times larger area than canvas)
-        const WORLD_SCALE_FACTOR = 7; // Changed from 3.5 to 7 to double world dimensions
+        const WORLD_SCALE_FACTOR = 7;
         let WORLD_WIDTH;
         let WORLD_HEIGHT;
 
@@ -458,6 +462,11 @@
         const PLANET_STOCK_REGENERATION_INTERVAL = 30; // Frames between stock regeneration updates
         const PLANET_SELL_BACK_FACTOR = 0.8; // Player sells goods back to planet for 80% of buy price
 
+        // System Timer
+        const SYSTEM_DURATION_MINUTES = 10;
+        const SYSTEM_DURATION_FRAMES = SYSTEM_DURATION_MINUTES * 60 * 60; // 10 minutes * 60 seconds/minute * 60 frames/second
+        let systemTimer = SYSTEM_DURATION_FRAMES; // Current system timer
+
         // Game state variables
         let gameFrame = 0;
         let player;
@@ -466,6 +475,7 @@
         let ores = [];
         let planets = [];
         let spaceStations = []; // New array for space stations
+        let wormhole = null; // Single wormhole instance
         let keys = {};
         let lastShotFrame = 0;
         let currentPlanet = null;
@@ -707,6 +717,15 @@
             }
         }
 
+        function formatTime(totalFrames) {
+            const seconds = Math.floor(totalFrames / 60);
+            const minutes = Math.floor(seconds / 60);
+            const remainingSeconds = seconds % 60;
+            const formattedMinutes = String(minutes).padStart(2, '0');
+            const formattedSeconds = String(remainingSeconds).padStart(2, '0');
+            return `${formattedMinutes}:${formattedSeconds}`;
+        }
+
 
         // Game Entities
         class PlayerShip {
@@ -823,6 +842,7 @@
                 maxCargoDisplay.textContent = this.maxCargo;
                 shieldDisplay.textContent = this.shield.toFixed(0); // Update shield UI
                 hullDisplay.textContent = this.hull.toFixed(0); // Update hull UI
+                systemTimerDisplay.textContent = formatTime(systemTimer); // Update timer UI
             }
 
             draw() {
@@ -1122,22 +1142,9 @@
                     };
                 }
 
-                // Ensure Iron Ore and Water Ice are also available for sale on at least one planet
-                const asteroidOreTypes = ['Iron Ore', 'Water Ice'];
-                asteroidOreTypes.forEach(oreType => {
-                    if (!inv[oreType]) {
-                        const basePrice = ITEMS[oreType].basePrice;
-                        const buyPriceForPlayer = getRandomInt(basePrice * 0.7, basePrice * 1.3);
-                        const initialStock = getRandomInt(2, 100);
-                        inv[oreType] = {
-                            buyPrice: buyPriceForPlayer,
-                            sellPrice: Math.floor(buyPriceForPlayer * PLANET_SELL_BACK_FACTOR),
-                            stock: initialStock,
-                            naturalStock: initialStock
-                        };
-                    }
-                });
-
+                // Ensure Iron Ore and Water Ice are also available for sale on this planet
+                // This logic needs to be handled outside of this specific planet's generation to ensure *at least one* planet has it.
+                // The global check will handle this for the *entire* system.
                 return inv;
             }
 
@@ -1269,6 +1276,67 @@
             }
         }
 
+        class Wormhole {
+            constructor(worldX, worldY) {
+                this.worldX = worldX;
+                this.worldY = worldY;
+                this.radius = WORMHOLE_RADIUS;
+                this.name = "Wormhole";
+                this.animationFrame = 0; // For simple animation
+            }
+
+            update() {
+                // Wormhole can have a subtle animation
+                this.animationFrame++;
+            }
+
+            draw() {
+                let relativeWorldX = this.worldX - player.worldX;
+                let relativeWorldY = this.worldY - player.worldY;
+
+                // Adjust for world wrapping to find the shortest path
+                if (relativeWorldX > WORLD_WIDTH / 2) relativeWorldX -= WORLD_WIDTH;
+                if (relativeWorldX < -WORLD_WIDTH / 2) relativeWorldX += WORLD_WIDTH;
+                if (relativeWorldY > WORLD_HEIGHT / 2) relativeWorldY -= WORLD_HEIGHT;
+                if (relativeWorldY < -WORLD_HEIGHT / 2) relativeWorldY += WORLD_HEIGHT;
+
+                const screenX = player.screenX + relativeWorldX;
+                const screenY = player.screenY + relativeWorldY;
+
+                ctx.save();
+                ctx.translate(screenX, screenY);
+
+                // Simple pulsating or swirling effect
+                const pulse = Math.sin(this.animationFrame * 0.05) * 5;
+                const innerRadius = this.radius * 0.4 + pulse;
+                const outerRadius = this.radius + pulse;
+
+                // Outer glow
+                ctx.beginPath();
+                ctx.arc(0, 0, outerRadius, 0, Math.PI * 2);
+                ctx.fillStyle = `rgba(150, 0, 255, ${0.3 + Math.sin(this.animationFrame * 0.03) * 0.1})`; // Purple glow
+                ctx.shadowBlur = 20;
+                ctx.shadowColor = '#9400D3'; // Dark Violet
+                ctx.fill();
+
+                // Inner swirl
+                ctx.beginPath();
+                ctx.arc(0, 0, innerRadius, 0, Math.PI * 2);
+                ctx.fillStyle = `rgba(50, 0, 150, ${0.8 + Math.cos(this.animationFrame * 0.04) * 0.1})`; // Darker purple
+                ctx.fill();
+
+                ctx.shadowBlur = 0; // Reset shadow
+
+                // Wormhole name text
+                ctx.fillStyle = '#FFFFFF';
+                ctx.font = '14px Inter';
+                ctx.textAlign = 'center';
+                ctx.fillText(this.name, 0, this.radius + 20);
+
+                ctx.restore();
+            }
+        }
+
 
         // Game Initialization
         function initGame() {
@@ -1284,25 +1352,15 @@
             radarCanvas.height = radarCanvas.offsetHeight;
             updateRadarScale(); // Calculate initial radar scale
 
-            player = new PlayerShip();
+            // Re-initialize player if not already done (only on first init, not restart)
+            if (!player) {
+                player = new PlayerShip();
+            } else {
+                // If restarting, reset player's position to world center
+                player.worldX = WORLD_WIDTH / 2;
+                player.worldY = WORLD_HEIGHT / 2;
+            }
             player.updateCargoWeight(); // Set initial cargo weight
-
-            // Spawn initial asteroids randomly across the large world
-            for (let i = 0; i < ASTEROID_MAX_COUNT / 2; i++) {
-                spawnAsteroid();
-            }
-
-            // Spawn initial planets randomly across the large world
-            const planetNames = ['Xylos', 'Kryll', 'Aethel', 'Zephyr', 'Nova Prime'];
-            for (let i = 0; i < PLANET_MAX_COUNT; i++) {
-                spawnPlanet(planetNames[i]);
-            }
-
-            // Spawn space stations
-            const stationNames = ['Alpha Shipyard', 'Orion Station'];
-            for (let i = 0; i < SPACE_STATION_MAX_COUNT; i++) {
-                spawnSpaceStation(stationNames[i]);
-            }
 
             // Generate static starfield
             stars = [];
@@ -1340,6 +1398,9 @@
                 radarCanvas.height = radarCanvas.offsetHeight;
                 updateRadarScale();
             });
+
+            // Call generateNewSystem to set up the first (or a new) system
+            generateNewSystem();
         }
 
         function updateRadarScale() {
@@ -1402,6 +1463,87 @@
             spaceStations.push(new SpaceStation(x, y, name));
         }
 
+        function spawnWormhole() {
+            const x = getRandomInt(0, WORLD_WIDTH);
+            const y = getRandomInt(0, WORLD_HEIGHT);
+            wormhole = new Wormhole(x, y);
+        }
+
+        // Function to generate a new system
+        function generateNewSystem() {
+            // Clear existing entities
+            asteroids = [];
+            ores = [];
+            planets = [];
+            spaceStations = [];
+            wormhole = null; // Clear old wormhole
+
+            // Reset game state related to entities
+            gameFrame = 0; // Reset frame count for the new system
+            lastShotFrame = 0;
+            currentPlanet = null;
+            currentSpaceStation = null;
+            dockableTargetCandidate = null;
+            systemTimer = SYSTEM_DURATION_FRAMES; // Reset system timer
+
+            // Reposition player to a central-ish point in the new world (or keep current position)
+            // For now, let's reset to center for simplicity to avoid immediate proximity issues
+            player.worldX = WORLD_WIDTH / 2;
+            player.worldY = WORLD_HEIGHT / 2;
+            player.speedX = 0; // Stop player movement
+            player.speedY = 0;
+            player.angle = -Math.PI / 2; // Reset player orientation
+
+            // Spawn new entities for the new system
+            // Spawn initial asteroids randomly across the large world
+            for (let i = 0; i < ASTEROID_MAX_COUNT; i++) { // Spawn full count
+                spawnAsteroid();
+            }
+
+            // Spawn initial planets randomly across the large world
+            const planetNames = ['Xylos', 'Kryll', 'Aethel', 'Zephyr', 'Nova Prime', 'Terra Nova', 'Ganymede IV', 'Keldar'];
+            for (let i = 0; i < PLANET_MAX_COUNT; i++) {
+                spawnPlanet(planetNames[getRandomInt(0, planetNames.length - 1)]);
+            }
+
+            // Ensure asteroid ores can be sold on at least one planet
+            const asteroidOreTypes = ['Copper Ore', 'Iron Ore', 'Water Ice'];
+            asteroidOreTypes.forEach(oreType => {
+                let foundPlanetForOre = false;
+                for (const planet of planets) {
+                    if (planet.inventory[oreType]) {
+                        foundPlanetForOre = true;
+                        break;
+                    }
+                }
+                if (!foundPlanetForOre) {
+                    // Add this ore to a random planet's inventory if no planet sells it
+                    const randomPlanet = planets[getRandomInt(0, planets.length - 1)];
+                    const basePrice = ITEMS[oreType].basePrice;
+                    const buyPriceForPlayer = getRandomInt(basePrice * 0.7, basePrice * 1.3);
+                    const initialStock = getRandomInt(2, 100);
+                    randomPlanet.inventory[oreType] = {
+                        buyPrice: buyPriceForPlayer,
+                        sellPrice: Math.floor(buyPriceForPlayer * PLANET_SELL_BACK_FACTOR),
+                        stock: initialStock,
+                        naturalStock: initialStock
+                    };
+                }
+            });
+
+
+            // Spawn space stations
+            const stationNames = ['Alpha Shipyard', 'Orion Station', 'Deep Space Hub'];
+            for (let i = 0; i < SPACE_STATION_MAX_COUNT; i++) {
+                spawnSpaceStation(stationNames[getRandomInt(0, stationNames.length - 1)]);
+            }
+
+            // Spawn wormhole
+            spawnWormhole();
+
+            showMessage("Entering a new system!");
+        }
+
         // Function to draw the radar map
         function drawRadar() {
             radarCtx.clearRect(0, 0, radarCanvas.width, radarCanvas.height);
@@ -1459,6 +1601,28 @@
                     radarCtx.fill();
                 }
             });
+
+            // Draw wormhole on radar
+            if (wormhole) {
+                let relativeWorldX = wormhole.worldX - player.worldX;
+                let relativeWorldY = wormhole.worldY - player.worldY;
+
+                if (relativeWorldX > WORLD_WIDTH / 2) relativeWorldX -= WORLD_WIDTH;
+                if (relativeWorldX < -WORLD_WIDTH / 2) relativeWorldX += WORLD_WIDTH;
+                if (relativeWorldY > WORLD_HEIGHT / 2) relativeWorldY -= WORLD_HEIGHT;
+                if (relativeWorldY < -WORLD_HEIGHT / 2) relativeWorldY += WORLD_HEIGHT;
+
+                const radarX = radarCanvas.width / 2 + relativeWorldX * RADAR_SCALE_FACTOR_X;
+                const radarY = radarCanvas.height / 2 + relativeWorldY * RADAR_SCALE_FACTOR_Y;
+
+                if (radarX >= 0 && radarX <= radarCanvas.width && radarY >= 0 && radarY <= radarCanvas.height) {
+                    radarCtx.beginPath();
+                    radarCtx.arc(radarX, radarY, RADAR_DOT_SIZE * 1.2, 0, Math.PI * 2); // Slightly larger dot for wormhole
+                    radarCtx.fillStyle = '#9400D3'; // Dark Violet for wormhole
+                    radarCtx.fill();
+                }
+            }
+
 
             // Draw asteroids on radar
             asteroids.forEach(asteroid => {
@@ -1551,6 +1715,15 @@
 
             ctx.clearRect(0, 0, canvas.width, canvas.height); // Clear main canvas
 
+            // Decrement system timer
+            if (systemTimer > 0) {
+                systemTimer--;
+            } else {
+                // Timer reached zero - placeholder for future events
+                // For now, it just stops counting down
+            }
+
+
             // Draw static starfield with parallax
             stars.forEach(star => {
                 let relativeWorldX = star.worldX - player.worldX;
@@ -1625,6 +1798,20 @@
                 }
             }
 
+            // Update and draw wormhole
+            if (wormhole) {
+                wormhole.update();
+                wormhole.draw();
+                // Check proximity to wormhole
+                const distToWormhole = getDistance(player.worldX, player.worldY, wormhole.worldX, wormhole.worldY);
+                if (distToWormhole < WORMHOLE_PROXIMITY_RADIUS) {
+                    if (distToWormhole < minDockingDistance) {
+                        minDockingDistance = distToWormhole;
+                        newClosestDockable = { type: 'wormhole', entity: wormhole };
+                    }
+                }
+            }
+
             // Update current dockable target and messages based on newClosestDockable
             if (newClosestDockable) {
                 if (newClosestDockable.type === 'planet') {
@@ -1643,6 +1830,13 @@
                     currentSpaceStation = newClosestDockable.entity;
                     currentPlanet = null; // Ensure only one is active
                     dockableTargetCandidate = newClosestDockable; // Store the candidate
+                } else if (newClosestDockable.type === 'wormhole') {
+                    if (dockableTargetCandidate?.entity !== newClosestDockable.entity || dockableTargetCandidate?.type !== 'wormhole') {
+                        showMessage(`Approaching ${newClosestDockable.entity.name}... Press 'E' to travel.`);
+                    }
+                    currentPlanet = null;
+                    currentSpaceStation = null;
+                    dockableTargetCandidate = newClosestDockable;
                 }
             } else {
                 // If no dockable entity is in range, clear both and show "Leaving docking range" if applicable
@@ -2134,6 +2328,7 @@
             ores = [];
             planets = [];
             spaceStations = []; // Reset space stations
+            wormhole = null; // Reset wormhole
             keys = {};
             lastShotFrame = 0;
             currentPlanet = null;
@@ -2147,7 +2342,7 @@
             isMenuOpen = false;
             pauseMessage.style.display = 'none'; // Hide pause message
 
-            // Re-initialize game entities
+            // Re-initialize game entities (will call generateNewSystem)
             initGame();
             hideMessage(); // Hide the game over message
 
@@ -2179,9 +2374,11 @@
                             openPlanetMenu(dockableTargetCandidate.entity);
                         } else if (dockableTargetCandidate.type === 'station') {
                             openShipyardMenu(dockableTargetCandidate.entity);
+                        } else if (dockableTargetCandidate.type === 'wormhole') {
+                            generateNewSystem(); // Travel through wormhole
                         }
                     } else {
-                        showMessage("No planet or station in range to dock."); // Provide feedback to user
+                        showMessage("No planet, station, or wormhole in range to dock/travel."); // Provide feedback to user
                     }
                     keys['KeyE'] = false; // Consume key press to avoid re-triggering immediately
                 }
